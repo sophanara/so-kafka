@@ -1,4 +1,4 @@
-package main
+package share
 
 import (
 	"encoding/binary"
@@ -55,19 +55,19 @@ type ConsumerResponseMessage struct {
 	Messages []KafkaMessage
 }
 
-func sendResponse(conn net.Conn, messageType uint8, payload interface{}) error {
+func SendResponse(conn net.Conn, messageType uint8, payload interface{}) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	return sendProtocoleMessage(conn, messageType, data)
+	return SendProtocoleMessage(conn, messageType, data)
 }
 
-func sendErrorResponse(conn net.Conn, errorMessage string) error {
-	return sendResponse(conn, ErrorResponse, map[string]string{"erorr": errorMessage})
+func SendErrorResponse(conn net.Conn, errorMessage string) error {
+	return SendResponse(conn, ErrorResponse, map[string]string{"erorr": errorMessage})
 }
 
-func readProtocoleMessage(r io.Reader) (*ProtocoleMessage, error) {
+func ReadProtocoleMessage(r io.Reader) (*ProtocoleMessage, error) {
 	// read the message type
 	var msgType uint8
 	if err := binary.Read(r, binary.BigEndian, &msgType); err != nil {
@@ -94,7 +94,7 @@ func readProtocoleMessage(r io.Reader) (*ProtocoleMessage, error) {
 	return result, nil
 }
 
-func sendProtocoleMessage(conn net.Conn, messageType uint8, payload []byte) error {
+func SendProtocoleMessage(conn net.Conn, messageType uint8, payload []byte) error {
 	// write the message type
 	if err := binary.Write(conn, binary.BigEndian, messageType); err != nil {
 		return err

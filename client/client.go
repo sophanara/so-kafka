@@ -1,9 +1,10 @@
-package main
+package client
 
 import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"sokafka/share"
 	"time"
 )
 
@@ -25,13 +26,13 @@ func sendRequest(conn net.Conn, messageType uint8, payload interface{}) error {
 	if err != nil {
 		return err
 	}
-	return sendProtocoleMessage(conn, messageType, data)
+	return share.SendProtocoleMessage(conn, messageType, data)
 }
 
 func (c *KafkaClient) Produce(topic string, partition int, messages [][]byte) (int64, error) {
-	kafkaMessages := make([]KafkaMessage, len(messages))
+	kafkaMessages := make([]share.KafkaMessage, len(messages))
 	for i, msg := range messages {
-		kafkaMessages[i] = KafkaMessage{
+		kafkaMessages[i] = share.KafkaMessage{
 			Topic:     topic,
 			Partition: partition,
 			Value:     msg,
@@ -39,22 +40,22 @@ func (c *KafkaClient) Produce(topic string, partition int, messages [][]byte) (i
 		}
 	}
 
-	req := ProduceRequestMessage{
+	req := share.ProduceRequestMessage{
 		Topic:     topic,
 		Partition: partition,
 		Messages:  kafkaMessages,
 	}
 
-	if err := sendRequest(c.conn, ProduceRequest, req); err != nil {
+	if err := sendRequest(c.conn, share.ProduceRequest, req); err != nil {
 		return 0, err
 	}
 
-	msg, err := readProtocoleMessage(c.conn)
+	msg, err := share.ReadProtocoleMessage(c.conn)
 	if err != nil {
 		return 0, err
 	}
 
-	var resp ProduceResponseMessage
+	var resp share.ProduceResponseMessage
 	if err := json.Unmarshal(msg.Payload, &resp); err != nil {
 		return 0, err
 	}
@@ -65,24 +66,24 @@ func (c *KafkaClient) Produce(topic string, partition int, messages [][]byte) (i
 	return resp.Offset, nil
 }
 
-func (c *KafkaClient) Consume(topic string, partition int, offset int64, maxBytes int) ([]KafkaMessage, error) {
-	req := ConsumerRequestMessage{
+func (c *KafkaClient) Consume(topic string, partition int, offset int64, maxBytes int) ([]share.KafkaMessage, error) {
+	req := share.ConsumerRequestMessage{
 		Topic:     topic,
 		Partition: partition,
 		Offset:    offset,
 		MaxBytes:  maxBytes,
 	}
 
-	if err := sendRequest(c.conn, ConsumeRequest, req); err != nil {
+	if err := sendRequest(c.conn, share.ConsumeRequest, req); err != nil {
 		return nil, err
 	}
 
-	msg, err := readProtocoleMessage(c.conn)
+	msg, err := share.ReadProtocoleMessage(c.conn)
 	if err != nil {
 		return nil, err
 	}
 
-	var resp ConsumerResponseMessage
+	var resp share.ConsumerResponseMessage
 	if err := json.Unmarshal(msg.Payload, &resp); err != nil {
 		return nil, err
 	}

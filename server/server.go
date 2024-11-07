@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"encoding/json"
@@ -7,9 +7,12 @@ import (
 	"log"
 	"log/slog"
 	"net"
+	"sokafka/share"
 	"sync"
 	"time"
 )
+
+type KafkaMessage = share.KafkaMessage
 
 type Topic struct {
 	Partitions map[int][]KafkaMessage
@@ -82,7 +85,7 @@ func (s *KafkaServer) handleConnection(conn net.Conn) {
 
 	for {
 		// read the message type
-		msg, err := readProtocoleMessage(conn)
+		msg, err := share.ReadProtocoleMessage(conn)
 		if err != nil {
 			if err != io.EOF {
 				log.Printf("Error reading message: %v\n", err)
@@ -91,24 +94,24 @@ func (s *KafkaServer) handleConnection(conn net.Conn) {
 		}
 
 		switch msg.MessageType {
-		case ProduceRequest:
+		case share.ProduceRequest:
 			err = s.handleProduceRequest(conn, msg.Payload)
 			if err != nil {
 				log.Printf("Error handleProduceRequest: %v\n", err)
 				return
 			}
-		case ConsumeRequest:
+		case share.ConsumeRequest:
 			s.handleConsumerRequest(conn, msg.Payload)
 		default:
-			sendErrorResponse(conn, "Unknow message type.")
+			share.SendErrorResponse(conn, "Unknow message type.")
 		}
 	}
 }
 
 func (s *KafkaServer) handleProduceRequest(conn net.Conn, payload []byte) error {
-	var req ProduceRequestMessage
+	var req share.ProduceRequestMessage
 	if err := json.Unmarshal(payload, &req); err != nil {
-		return sendErrorResponse(conn, "Invalidate produce request format")
+		return share.SendErrorResponse(conn, "Invalidate produce request format")
 	}
 
 	// for each meesage produce kakfka message
@@ -124,7 +127,7 @@ func (s *KafkaServer) handleProduceRequest(conn net.Conn, payload []byte) error 
 	}
 
 	// seend back to the client the response result of this produce request
-	produceResponse := ProduceResponseMessage{
+	produceResponse := share.ProduceResponseMessage{
 		Offset:  lastOffset,
 		Success: produceError == nil,
 		Error:   "",
@@ -134,27 +137,27 @@ func (s *KafkaServer) handleProduceRequest(conn net.Conn, payload []byte) error 
 		produceResponse.Error = produceError.Error()
 	}
 
-	return sendResponse(conn, ProduceResponse, produceResponse)
+	return share.SendResponse(conn, share.ProduceResponse, produceResponse)
 }
 
 func (s *KafkaServer) handleConsumerRequest(conn net.Conn, payload []byte) error {
-	var req ConsumerRequestMessage
+	var req share.ConsumerRequestMessage
 	if err := json.Unmarshal(payload, &req); err != nil {
-		sendErrorResponse(conn, "Invalide consumer request  format")
+		share.SendErrorResponse(conn, "Invalide consumer request  format")
 	}
 
 	messages, err := s.Consume(req.Topic, req.Partition, req.Offset)
 	if err != nil {
-		sendErrorResponse(conn, err.Error())
+		share.SendErrorResponse(conn, err.Error())
 		return err
 	}
 
-	response := ConsumerResponseMessage{
+	response := share.ConsumerResponseMessage{
 		Error:    "",
 		Messages: messages,
 	}
 
-	return sendResponse(conn, ConsumeResponse, response)
+	return share.SendResponse(conn, share.ConsumeResponse, response)
 }
 
 func (s *KafkaServer) Produce(topicName string, partition int, value []byte) error {
