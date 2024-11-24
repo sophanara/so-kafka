@@ -14,7 +14,7 @@ func main() {
 	}
 	defer client.Close()
 
-	///produce messages
+	// produce messages
 	messages := [][]byte{
 		[]byte("Hello"),
 		[]byte("World"),
@@ -24,14 +24,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	fmt.Printf("Produce messages, offset: %d\n", offset)
 
-	fmt.Printf("Produce messages, offset: %d\n", offset)
-	offset, err = client.Produce("test-partition", 0, messages)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("Produce messages, offset: %d\n", offset)
-	// consume messages
 	consumed, err := client.Consume("test-partition", 0, 0, 1024)
 	if err != nil {
 		log.Fatal(err)

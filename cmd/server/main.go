@@ -8,9 +8,12 @@ import (
 func main() {
 	server := server.NewKafkaServer()
 
-	if err := server.CreateTopic("test-partition", 3); err != nil {
+	err := server.CreateTopic("test-partition", 3)
+	if err != nil {
 		log.Fatal(err)
 	}
+
+	defer server.Close("test-partition")
 
 	log.Fatal(server.StartServer())
 }

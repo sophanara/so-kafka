@@ -5,16 +5,16 @@ import (
 	"encoding/json"
 	"io"
 	"net"
-	"time"
 )
 
 // Mesage resperesent a Kafka Message
 type KafkaMessage struct {
-	Timestamp time.Time
-	Topic     string
+	// Topic     string
 	Value     []byte
-	Partition int
-	Offset    int64
+	Timestamp int64
+	// Partition int
+	Offset int64
+	Size   uint32
 }
 
 // Protocole message type

@@ -33,10 +33,8 @@ func (c *KafkaClient) Produce(topic string, partition int, messages [][]byte) (i
 	kafkaMessages := make([]share.KafkaMessage, len(messages))
 	for i, msg := range messages {
 		kafkaMessages[i] = share.KafkaMessage{
-			Topic:     topic,
-			Partition: partition,
 			Value:     msg,
-			Timestamp: time.Now(),
+			Timestamp: time.Now().Unix(),
 		}
 	}
 
