@@ -24,6 +24,7 @@ const (
 	ConsumeRequest  = 3
 	ConsumeResponse = 4
 	ErrorResponse   = 5
+	CommitOffset    = 6
 )
 
 type ProtocoleMessage struct {
@@ -44,15 +45,27 @@ type ProduceResponseMessage struct {
 }
 
 type ConsumerRequestMessage struct {
-	Topic     string
-	Partition int
-	Offset    int64
-	MaxBytes  int
+	Topic     string `json:"topic"`
+	Partition int    `json:"partition"`
+	ClientID  string `json:"client_id"`
+	MaxBytes  int    `json:"max_bytes"`
 }
 
 type ConsumerResponseMessage struct {
 	Error    string
 	Messages []KafkaMessage
+}
+
+type CommitOffsetMessage struct {
+	Topic     string `json:"topic"`
+	Partition int    `json:"partition"`
+	ClientID  string `json:"client_id"`
+	Offset    int64  `json:"offset"`
+}
+
+type CommitOffsetResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
 }
 
 func SendResponse(conn net.Conn, messageType uint8, payload interface{}) error {

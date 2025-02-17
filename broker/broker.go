@@ -1,4 +1,4 @@
-package server
+package broker
 
 import (
 	"encoding/json"
@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"sokafka/share"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -22,18 +24,29 @@ type Topic struct {
 	mu             sync.RWMutex
 }
 
-type KafkaServer struct {
-	Topics map[string]*Topic
-	mu     sync.RWMutex
+type KafkaBroker struct {
+	Topics    map[string]*Topic
+	mu        sync.RWMutex
+	offsetMgr *OffsetManager
+	basePath  string
 }
 
-func NewKafkaServer() *KafkaServer {
-	return &KafkaServer{
-		Topics: make(map[string]*Topic),
+func NewKafkaBroker() *KafkaBroker {
+	currentPath, err := os.Getwd()
+
+	if err != nil {
+		currentPath = "tmp/kafka"
+	} else {
+		currentPath = filepath.Join(currentPath, "tmp/kafka")
+	}
+	return &KafkaBroker{
+		Topics:    make(map[string]*Topic),
+		offsetMgr: NewOffsetManager(currentPath),
+		basePath:  currentPath,
 	}
 }
 
-func (s *KafkaServer) createFilePartition(baseDir string, topic string, partitionId int) (*FilePartition, error) {
+func (s *KafkaBroker) createFilePartition(baseDir string, topic string, partitionId int) (*FilePartition, error) {
 	fp := &FilePartition{
 		baseDir:     baseDir,
 		topic:       topic,
@@ -77,7 +90,7 @@ func (s *KafkaServer) createFilePartition(baseDir string, topic string, partitio
 	return fp, nil
 }
 
-func (s *KafkaServer) Close(topicName string) {
+func (s *KafkaBroker) Close(topicName string) {
 	fileParts := s.Topics[topicName].FilePartitions
 	for k := range fileParts {
 		if err := fileParts[k].Close(); err != nil {
@@ -86,14 +99,27 @@ func (s *KafkaServer) Close(topicName string) {
 	}
 }
 
-func (s *KafkaServer) CreateTopic(topicName string, numberPartition int) error {
+func (s *KafkaBroker) CreateTopic(topicName string, numberPartition int) error {
 	fmt.Println("Starting the creation of the file topic structure...")
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %v", err)
+	}
+
+	fmt.Printf("Current working directory: %s\n", currentDir)
+
+	//Load existing topics and partitions
+	if err := s.loadExistingTopics(); err != nil {
+		log.Printf("Error laoding existing tiopics: %v", err)
+	}
+
 	// check if the topic has been created
 	if _, exist := s.Topics[topicName]; exist {
-		return fmt.Errorf("topic %s already exist", topicName)
+		log.Printf("topic %s already exist", topicName)
+		return nil
 	}
 
 	topic := &Topic{
@@ -102,14 +128,12 @@ func (s *KafkaServer) CreateTopic(topicName string, numberPartition int) error {
 		mu:             sync.RWMutex{},
 	}
 
-	baseDir := "tmp/kafka"
-
 	topic.mu.Lock()
 	defer topic.mu.Unlock()
 
 	// create all the partitions
 	for i := 0; i < numberPartition; i++ {
-		filePartition, err := s.createFilePartition(baseDir, topicName, i)
+		filePartition, err := s.createFilePartition(s.basePath, topicName, i)
 		if err != nil {
 			return err
 		}
@@ -120,7 +144,8 @@ func (s *KafkaServer) CreateTopic(topicName string, numberPartition int) error {
 	return nil
 }
 
-func (s *KafkaServer) StartServer() error {
+func (s *KafkaBroker) StartServer() error {
+
 	ln, err := net.Listen("tcp", ":9092")
 	if err != nil {
 		return err
@@ -144,12 +169,11 @@ func (s *KafkaServer) StartServer() error {
 	}
 }
 
-func (s *KafkaServer) handleConnection(conn net.Conn) {
+func (s *KafkaBroker) handleConnection(conn net.Conn) {
 	fmt.Println("new connection", conn.RemoteAddr())
 	defer conn.Close()
 
 	for {
-		// read the message type
 		msg, err := share.ReadProtocoleMessage(conn)
 		if err != nil {
 			if err != io.EOF {
@@ -161,27 +185,22 @@ func (s *KafkaServer) handleConnection(conn net.Conn) {
 		switch msg.MessageType {
 		case share.ProduceRequest:
 			err = s.handleProduceRequest(conn, msg.Payload)
-			if err != nil {
-				log.Printf("Error handleProduceRequest: %v\n", err)
-				return
-			}
 		case share.ConsumeRequest:
 			err = s.handleConsumerRequest(conn, msg.Payload)
-			if err != nil {
-				log.Printf("Error handling consumer request: %v\n", err)
-				return
-			}
+		case share.CommitOffset:
+			err = s.handleCommitOffset(conn, msg.Payload)
 		default:
-			err = share.SendErrorResponse(conn, "Unknow message type.")
-			if err != nil {
-				log.Printf("Error handling response: %v\n", err)
-				return
-			}
+			err = share.SendErrorResponse(conn, "Unknown message type.")
+		}
+
+		if err != nil {
+			log.Printf("Error handling request: %v\n", err)
+			return
 		}
 	}
 }
 
-func (s *KafkaServer) handleProduceRequest(conn net.Conn, payload []byte) error {
+func (s *KafkaBroker) handleProduceRequest(conn net.Conn, payload []byte) error {
 	var req share.ProduceRequestMessage
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return share.SendErrorResponse(conn, "Invalidate produce request format")
@@ -199,7 +218,7 @@ func (s *KafkaServer) handleProduceRequest(conn net.Conn, payload []byte) error 
 		lastOffset = offset
 	}
 
-	// seend back to the client the response result of this produce request
+	// send back to the client the response result of this produce request
 	produceResponse := share.ProduceResponseMessage{
 		Offset:  lastOffset,
 		Success: produceError == nil,
@@ -213,22 +232,31 @@ func (s *KafkaServer) handleProduceRequest(conn net.Conn, payload []byte) error 
 	return share.SendResponse(conn, share.ProduceResponse, produceResponse)
 }
 
-func (s *KafkaServer) handleConsumerRequest(conn net.Conn, payload []byte) error {
+func (s *KafkaBroker) handleConsumerRequest(conn net.Conn, payload []byte) error {
 	var req share.ConsumerRequestMessage
 	if err := json.Unmarshal(payload, &req); err != nil {
-		if err = share.SendErrorResponse(conn, "Invalid consumer request  format"); err != nil {
+		if err = share.SendErrorResponse(conn, "Invalid consumer request format"); err != nil {
 			return err
 		}
-
 		return err
 	}
 
-	messages, err := s.Consume(req.Topic, req.Partition, req.Offset, req.MaxBytes)
+	// Get offset from offset manager
+	offset := s.offsetMgr.GetOffset(req.ClientID, req.Topic, req.Partition)
+	fmt.Printf("Consume offset: %d \n", offset)
+
+	messages, err := s.Consume(req.Topic, req.Partition, offset, req.MaxBytes)
 	if err != nil {
 		if err = share.SendErrorResponse(conn, err.Error()); err != nil {
 			return err
 		}
 		return err
+	}
+
+	// Update offset if messages were returned
+	if len(messages) > 0 {
+		lastMsg := messages[len(messages)-1]
+		s.offsetMgr.CommitOffset(req.ClientID, req.Topic, req.Partition, lastMsg.Offset+1)
 	}
 
 	response := share.ConsumerResponseMessage{
@@ -239,7 +267,22 @@ func (s *KafkaServer) handleConsumerRequest(conn net.Conn, payload []byte) error
 	return share.SendResponse(conn, share.ConsumeResponse, response)
 }
 
-func (s *KafkaServer) produce(topicName string, partition int, value []byte) (int64, error) {
+func (s *KafkaBroker) handleCommitOffset(conn net.Conn, payload []byte) error {
+	var req share.CommitOffsetMessage
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return share.SendErrorResponse(conn, "Invalid commit offset request format")
+	}
+
+	s.offsetMgr.CommitOffset(req.ClientID, req.Topic, req.Partition, req.Offset)
+
+	response := share.CommitOffsetResponse{
+		Success: true,
+	}
+
+	return share.SendResponse(conn, share.CommitOffset, response)
+}
+
+func (s *KafkaBroker) produce(topicName string, partition int, value []byte) (int64, error) {
 	s.mu.RLock()
 	topic, exist := s.Topics[topicName]
 	s.mu.RUnlock()
@@ -264,7 +307,7 @@ func (s *KafkaServer) produce(topicName string, partition int, value []byte) (in
 	return offset, nil
 }
 
-func (s *KafkaServer) Consume(topicName string, partition int, offset int64, maxBytes int) ([]KafkaMessage, error) {
+func (s *KafkaBroker) Consume(topicName string, partition int, offset int64, maxBytes int) ([]KafkaMessage, error) {
 	s.mu.RLock()
 	topic, exist := s.Topics[topicName]
 	s.mu.RUnlock()
@@ -287,4 +330,64 @@ func (s *KafkaServer) Consume(topicName string, partition int, offset int64, max
 	}
 
 	return messages, nil
+}
+
+func (s *KafkaBroker) loadExistingTopics() error {
+	log.Println("Loading existing topics")
+	dir := s.basePath
+	// read from the base directory
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			//create the base directory if if doesn't exist
+			return os.MkdirAll(dir, 0755)
+		}
+		return err
+	}
+
+	// Iterator of the directory entries to find the topics
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		topicName := entry.Name()
+		// Read topic directory to count the number of partitions
+
+		partitionEntries, err := os.ReadDir(filepath.Join(dir, topicName))
+		if err != nil {
+			continue // skip if can't read topic directory
+		}
+
+		// Create topic with existing partitions
+		topic := &Topic{
+			Name:           topicName,
+			FilePartitions: make(map[int]*FilePartition),
+			mu:             sync.RWMutex{},
+		}
+
+		// Load each partition
+		for _, partEntry := range partitionEntries {
+			if strings.HasPrefix(partEntry.Name(), "partition-") {
+				partIdString := strings.TrimPrefix(partEntry.Name(), "partition-")
+				partId, err := strconv.Atoi(partIdString)
+				if err != nil {
+					log.Printf("Warning: Invalid partition name %s: %v", partEntry.Name(), err)
+					continue // Skip invalid partition names
+				}
+
+				filePartition, err := s.createFilePartition(dir, topicName, partId)
+				if err != nil {
+					continue //Skip failed partitions load
+				}
+				topic.FilePartitions[partId] = filePartition
+			}
+		}
+
+		//Add the topic to broker if it has any valid partitions
+		if len(topic.FilePartitions) > 0 {
+			s.Topics[topicName] = topic
+		}
+	}
+	return nil
 }

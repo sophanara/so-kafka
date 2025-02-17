@@ -1,4 +1,4 @@
-package server
+package broker
 
 import (
 	"encoding/binary"
@@ -110,7 +110,15 @@ func (p *FilePartition) Append(value []byte, timestamp int64) (int64, error) {
 	return offset, nil
 }
 
+// writeIndexEntry writes an index entry to the index file.
+// The index entry contains the offset, position, and timestamp of a message,
+// allowing for efficient message lookup by offset.
 func (p *FilePartition) writeIndexEntry(entry IndexEntry) error {
+	// Seek to end of file to ensure we're appending
+	if _, err := p.indexFile.Seek(0, io.SeekEnd); err != nil {
+		return err
+	}
+
 	return json.NewEncoder(p.indexFile).Encode(entry)
 }
 

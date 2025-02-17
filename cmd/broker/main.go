@@ -2,11 +2,11 @@ package main
 
 import (
 	"log"
-	"sokafka/server"
+	"sokafka/broker"
 )
 
 func main() {
-	server := server.NewKafkaServer()
+	server := broker.NewKafkaBroker()
 
 	err := server.CreateTopic("test-partition", 3)
 	if err != nil {

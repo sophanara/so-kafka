@@ -1,5 +1,5 @@
 build: 
-	@go build -o bin/kafka ./cmd/server/main.go
+	@go build -o bin/kafka ./cmd/broker/main.go
 	@go build -o bin/kafka-client ./cmd/client/main.go
 
 run: build 
